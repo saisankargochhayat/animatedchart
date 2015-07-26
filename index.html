@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang = "en">
+    <head>
+        <meta charset = "utf-8">
+        <title>AnimeLine</title>
+        <script type = "text/javascript" src = "d3.js"></script>
+        <script type = "text/javascript" src = "http://projects.delimited.io/experiments/force-bubbles/lib/underscore.js"></script>
+        <script type = "text/javascript" src = "http://labratrevenge.com/d3-tip/javascripts/d3.tip.v0.6.3.js"></script>
+        <script type = "text/javascript" src = "http://projects.delimited.io/experiments/force-bubbles/lib/jquery.js"></script>
+        <script type = "text/javascript" src = "colorbrewer.js"></script>
+        <link type = "text/css" rel = "colorbrewer" href = "colorbrewer.css"/>
+    </head>
+    <style>
+        #chart {
+
+            width: 1500px;
+          	height: 920px;
+            position: fixed;
+        }
+
+        /* SVG styling */
+        svg {
+        	width: 1500px;
+        	height: 920px;
+        	font-family: helvetica, sans-serif;
+        }
+
+        /* axes */
+        .axes line {
+        	stroke: #bbb;
+        }
+        .axes path, .axes line {
+        	stroke: #ccc;
+        	fill: none;
+        	shape-rendering: crispEdges;
+        }
+
+        .axes text {
+        	font-weight: 300;
+        	font-size: 12px;
+        	fill: #666;
+        }
+
+
+        /* zValues */
+        g.zValue path {
+        	fill: none;
+        	stroke: #333;
+        	stroke-width: 1px;
+        }
+
+        g.zValue line {
+        	stroke: #666;
+        	stroke-width: 1px;
+        }
+
+        g.zValue line.base {
+        	display: none;
+        }
+
+        g.zValue .label {
+        	opacity: 0;
+        	fill: #666;
+        	font-size: 17px;
+        	font-weight: bold;
+        }
+
+        g.zValue.hover, g.zValue.hover .label {
+        	opacity: 1 !important;
+        }
+        .zValue.hover path {
+        	stroke-width: 4px;
+        }
+        .zValue.hover line.start {
+        	display: none;
+    }
+        }
+    </style>
+    <body>
+        <div id="chart"> <svg></svg></div>
+        <script type="text/javascript">
+            d3.json("sampledata1.json", function(data) {
+                var perspectiveOffsetX = 2,
+                    perspectiveOffsetY = 2;
+
+                var chartHeight = 450,
+                    lineWidth = 700,
+                    lineHeight = 200;
+
+                var bodyHeight = 4000, // Scroll height
+                    windowHeight = 0,
+                    scrollScale = null;
+
+                var xScale = null,
+                    yScale = null,
+                    svgLine = null,
+                    colorScale = null;
+
+                var sortFunction = {};
+
+                function translate(x, y) {
+                    return 'translate('+x+','+y+')';
+                }
+
+                var dataset = [];
+
+                var numColors = _.uniq(_.pluck(data, "Clinical Ex-Bundle")).length;
+                var lineColorScale = d3.scale.ordinal()
+                      .domain(_.uniq(_.pluck(data, "Clinical Ex-Bundle")))
+                      .range(colorbrewer["RdYlBu"][numColors]);
+
+                function init() {
+                    var drgValue = "AICD";
+                    var d1 = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+                    var k = 0;
+                    var cxBundle = "Miscellaneous ";
+                    var timeScale = d3.scale.ordinal()
+                        .domain(['Q2-11', 'Q3-11', 'Q4-11', 'Q1-12', 'Q2-12', 'Q3-12', 'Q4-12', 'Q1-13', 'Q2-13', 'Q3-13', 'Q4-13', 'Q1-14', 'Q2-14', 'Q3-14', 'Q4-14', 'Q1-15', 'Q2-15'])
+                        .rangePoints([0, 16]);
+
+                    _.each(_.sortBy(data, "Clinical Bundle"), function(d) {
+                        if (drgValue == d["Clinical Bundle"]) {
+                            var ind = timeScale(d.Quarter);
+                            d1[ind] = d["Avg Direct Cost"];
+                        } else {
+                            dataset.push({zValue: drgValue, data: d1, max: _.max(d1), min: _.min(d1), bundle: cxBundle});
+                            k = k + 1;
+                            d1 = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+                            var ind = timeScale(d.Quarter);
+                            d1[ind] = d["Avg Direct Cost"];
+                            drgValue = d["Clinical Bundle"];
+                            cxBundle =  d["Clinical Ex-Bundle"];
+                        }
+		                });
+
+                    d3.select('body').style('height', bodyHeight + 'px');
+  	                windowHeight = $(window).height();
+  	                scrollScale = d3.scale.linear().domain([0, bodyHeight - windowHeight * 0.99]).range([0, 206]).clamp(true);
+
+                    sortFunction.zValue = function(a, b) {return d3.descending(a.zValue, b.zValue);}
+                    sortFunction.max = function(a, b) {return d3.descending(a.max, b.max);}
+                    sortFunction.min = function(a, b) {return d3.descending(a.min, b.min);}
+
+  	                initChart();
+  	                initEvents();
+                }
+
+                var uiState = {
+                    selectedIndex: 0,
+                    selectedDatum: null, // Automatically updated
+                    sortBy: 'zValue',
+                    sorting: false
+                };
+
+                function updateVisibleZvalues() {
+                    var index = uiState.selectedIndex;
+                    var zValues= d3.selectAll('#chart .zValues g.zValue');
+                    zValues.classed('hover', false);
+
+                    zValues
+                        .filter(function(d, i) {return i === index;})
+			                  .classed('hover', true);
+
+		                d3.selectAll('.axes')
+  		                  .attr('transform', translate(30 + (index + 80) * perspectiveOffsetX, chartHeight + yScale(0) + -(index) * perspectiveOffsetY));
+
+                    zValues
+			                  .style('opacity', function(d, i) {
+                            if(i < index) return 0;
+                            return colorScale(i);
+			                  });
+
+                    var datum = zValues.filter(function(d, i) {return i === index;}).datum();
+                    uiState.selectedDatum = datum;
+                }
+
+                function handleScroll() {
+                    if(uiState.sorting) return;
+                    var scroll = $(window).scrollTop();
+                    uiState.selectedIndex = Math.round(scrollScale(scroll));
+                    updateVisibleZvalues();
+                }
+
+                function initEvents() {
+                    $(window).scroll(handleScroll);
+                    $(window).on('touchmove', handleScroll);
+                }
+
+                function initChart() {
+                    xScale = d3.scale.linear()
+                        .domain([0, 16])
+                        .range([0, lineWidth]);
+
+                    yScale = d3.scale.linear()
+                        .domain([_.min(_.pluck(data, "Avg Direct Cost")), _.max(_.pluck(data, "Avg Direct Cost"))])
+                        .range([lineHeight, 0]);
+
+                    colorScale = d3.scale.linear()
+                        .domain([0, 102])
+                        .range([1, 0.5]);
+
+                    svgLine = d3.svg.line()
+                        .interpolate('cardinal')
+                        .x(function(d, i) {return xScale(i);})
+                        .y(function(d) {return yScale(d);});
+
+                    var zValues = d3.select('#chart svg')
+                        .append('g')
+                        .classed('zValues', true)
+                        .attr('transform', translate(30, chartHeight))
+                        .selectAll('g.zValue')
+                        .data(dataset)
+                        .enter()
+                        .append('g')
+                        .attr('class', function(d, i) {return 'zValue-' + d.zValue;})
+                        .classed('zValue', true)
+                        .sort(sortFunction[uiState.sortBy])
+                        .attr('transform', function(d, i) {
+                            return translate((i + 80) * perspectiveOffsetX, -(i) * perspectiveOffsetY);
+                        })
+                        .style('opacity', function(d, i) {
+                            return colorScale(i);
+                        });
+
+                    // Add paths
+                    zValues
+                        .append('path')
+                        .attr('d', function(d, i) {
+                            return svgLine(d.data);
+                        })
+                        .each(function(d) {
+                          var color = lineColorScale(d.bundle);
+                          d3.select(this)
+                            .style('stroke', color);
+                        });
+
+                    // Base and end lines
+                    zValues
+                        .append('line')
+                        .classed('base', true)
+                        .attr('x1', 0)
+                        .attr('y1', yScale(0))
+                        .attr('x2', xScale(16))
+                        .attr('y2', yScale(0));
+
+                    zValues
+                        .append('line')
+                        .classed('start', true)
+                        .attr('x1', 0)
+                        .attr('y1', yScale(0))
+                        .attr('x2', 0)
+                        .attr('y2', function(d) {return yScale(d.data[0]);});
+
+                    zValues
+                        .append('line')
+                        .classed('end', true)
+                        .attr('x1', xScale(16))
+                        .attr('y1', yScale(0))
+                        .attr('x2', xScale(16))
+                        .attr('y2', function(d) {
+                            var ind = d.data.length - 1;
+                            return yScale(d.data[ind]);
+                        });
+
+                    zValues
+                        .append('text')
+                        .classed('label', true)
+                        .attr('x', xScale(16) + 5)
+                        .attr('y', yScale(0))
+                        .text(function(d) {return d.zValue;})
+                        .each(function(d) {
+                          //if(!_.has(that.data.info, d.year)) return;
+                          console.log(d);
+                          var color = lineColorScale(d.bundle);
+                          console.log(color);
+                          d3.select(this)
+                            .style('fill', color);
+                        });
+
+                    d3.select('#chart svg')
+                        .append('g')
+                        .classed('axes', true)
+                        .attr('transform', translate(30, chartHeight));
+
+                    renderAxes();
+                }
+
+                function renderAxes() {
+
+                    var timeScale = d3.scale.ordinal()
+                        .domain(['Q2-11', 'Q3-11', 'Q4-11', 'Q1-12', 'Q2-12', 'Q3-12', 'Q4-12', 'Q1-13', 'Q2-13', 'Q3-13', 'Q4-13', 'Q1-14', 'Q2-14', 'Q3-14', 'Q4-14', 'Q1-15', 'Q2-15'])
+                        .rangePoints([0, lineWidth]);
+
+                    var yAxis = d3.svg.axis()
+                        .scale(yScale)
+                        .orient('left');
+
+                    d3.select('#chart .axes')
+                        .append('g')
+                        .classed('axis y', true)
+                        .attr('transform', translate(0, -yScale(0)))
+                        .call(yAxis);
+
+                    var xAxis = d3.svg.axis()
+                        .scale(timeScale)
+                        .orient('bottom');
+
+                    d3.select('#chart .axes')
+                        .append('g')
+                        .classed('axis x', true)
+                        .call(xAxis);
+
+                    d3.select("#chart .axes")
+                        .append("text")
+                        .attr("class", "label")
+                        .attr("x", lineWidth)
+                        .attr("y", 30)
+                        .style({"text-anchor": "end", "fill": "black"})
+                        .text("Quarters");
+
+                    d3.select("#chart .axes")
+                        .append("text")
+                        .attr("class", "label")
+                        .attr("transform", "rotate(-90)")
+                        .attr("y", 6)
+                        .attr("x", lineHeight)
+                        .attr("dy", ".71em")
+                        .style({"text-anchor": "end", "fill": "black"})
+                        .text("Payments");
+                }
+
+                init();
+                updateVisibleZvalues();
+            });
+        </script>
+    </body>
+</html>
